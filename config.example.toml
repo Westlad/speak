@@ -1,0 +1,28 @@
+[openclaw]
+# Local default:
+# gateway_url = "ws://127.0.0.1:18789"
+#
+# Example LAN setup:
+# gateway_url = "ws://192.168.1.50:18789"
+# If mDNS resolves only to a link-local IPv6 address, use a scoped literal instead:
+# gateway_url = "ws://[fe80::1234:5678:abcd:ef01%eth0]:18789"
+# gateway_token = "your-lan-token"
+gateway_url = "ws://127.0.0.1:18789"
+gateway_token = "replace-me"
+session_filter = ""
+
+[elevenlabs]
+api_key = "replace-me"
+voice_id = "replace-me"
+model_id = "eleven_multilingual_v2"
+output_format = "pcm_24000"
+# language_code = "en"
+
+[audio]
+output_device = ""
+sample_rate_hz = 44100
+channel_count = 1
+
+[speech]
+interrupt_on_new_reply = true
+dedupe_window_ms = 5000

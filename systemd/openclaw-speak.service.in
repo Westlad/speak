@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenClaw Speak voice daemon
+After=default.target network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKDIR@
+ExecStart=@EXEC_START@ daemon
+Restart=on-failure
+RestartSec=2
+Environment=RUST_LOG=info
+
+[Install]
+WantedBy=default.target
+
