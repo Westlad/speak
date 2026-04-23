@@ -118,9 +118,7 @@ This repo includes a system-level unit for running the daemon in the background.
 Build the release binary and install the bundled service:
 
 ```bash
-cargo build --release --features audio-cpal
-sudo install -m 0644 systemd/openclaw-speak.service /etc/systemd/system/openclaw-speak.service
-sudo systemctl daemon-reload
+./scripts/install-systemd-service.sh
 ```
 
 Enable and start it:
@@ -139,7 +137,7 @@ sudo systemctl restart openclaw-speak.service
 
 Notes:
 
-- the unit runs as user `duncan`
+- the installer renders the unit for the current `$USER`, checkout path, and user runtime directory
 - the unit runs with `WorkingDirectory` set to this repo root, so the local `.env` file continues to load
 - the unit sets the user audio runtime variables needed to reach PipeWire/Pulse from a system service
 
