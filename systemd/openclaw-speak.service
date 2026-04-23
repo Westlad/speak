@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenClaw Speak voice daemon
+Documentation=https://github.com/Westlad/speak
+Wants=network-online.target
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+User=duncan
+Group=duncan
+WorkingDirectory=/home/duncan/git/speak
+EnvironmentFile=/home/duncan/git/speak/.env
+Environment=RUST_LOG=info
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=PIPEWIRE_RUNTIME_DIR=/run/user/1000
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+ExecStart=/home/duncan/git/speak/target/release/openclaw-speak daemon
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -111,35 +111,37 @@ With `audio-cpal` enabled, the app will:
 - resample it to the selected device configuration when needed
 - play speech through the chosen output device
 
-## systemd User Service
+## systemd Service
 
-This repo includes a `systemd --user` unit template and installer helper for running the daemon in the background.
+This repo includes a system-level unit for running the daemon in the background.
 
-Install the service files for the current checkout:
+Build the release binary and install the bundled service:
 
 ```bash
-./scripts/install-systemd-user-service.sh
+cargo build --release --features audio-cpal
+sudo install -m 0644 systemd/openclaw-speak.service /etc/systemd/system/openclaw-speak.service
+sudo systemctl daemon-reload
 ```
 
 Enable and start it:
 
 ```bash
-systemctl --user enable --now openclaw-speak.service
+sudo systemctl enable --now openclaw-speak.service
 ```
 
 Useful commands:
 
 ```bash
-systemctl --user status openclaw-speak.service
-journalctl --user -u openclaw-speak.service -f
-systemctl --user restart openclaw-speak.service
+sudo systemctl status openclaw-speak.service
+journalctl -u openclaw-speak.service -f
+sudo systemctl restart openclaw-speak.service
 ```
 
 Notes:
 
-- the installer builds `target/release/openclaw-speak` with `--features audio-cpal` if needed
+- the unit runs as user `duncan`
 - the unit runs with `WorkingDirectory` set to this repo root, so the local `.env` file continues to load
-- if you move the repo, rerun the installer so the generated unit points at the new path
+- the unit sets the user audio runtime variables needed to reach PipeWire/Pulse from a system service
 
 ## Cross-compiling for Raspberry Pi 5
 
