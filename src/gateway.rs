@@ -282,7 +282,10 @@ impl GatewayConnection {
         self.event_rx.recv().await
     }
 
-    pub async fn fetch_latest_assistant_reply(&self, session_key: &str) -> Result<Option<String>> {
+    pub async fn fetch_latest_assistant_reply(
+        &self,
+        session_key: &str,
+    ) -> Result<Option<AssistantReply>> {
         let payload = match self
             .call(
                 "chat.history",
@@ -309,7 +312,7 @@ impl GatewayConnection {
             }
         };
 
-        let reply = extract_latest_assistant_text(&payload);
+        let reply = extract_latest_assistant_reply(&payload);
         if reply.is_none() {
             tracing::info!(
                 "chat.history returned no assistant text for session {}: {}",
@@ -624,12 +627,21 @@ fn collect_session_summaries(value: &Value, output: &mut Vec<SessionSummary>) {
     }
 }
 
-fn extract_latest_assistant_text(value: &Value) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantReply {
+    pub text: String,
+    pub fingerprint: String,
+}
+
+fn extract_latest_assistant_reply(value: &Value) -> Option<AssistantReply> {
     let mut messages = Vec::new();
     collect_message_candidates(value, &mut messages);
     let latest = messages.into_iter().next_back()?;
     match latest.speaker {
-        MessageSpeaker::Assistant => latest.text,
+        MessageSpeaker::Assistant => Some(AssistantReply {
+            text: latest.text?,
+            fingerprint: latest.fingerprint?,
+        }),
         MessageSpeaker::NonAssistant => None,
     }
 }
@@ -641,6 +653,7 @@ fn collect_message_candidates(value: &Value, output: &mut Vec<MessageCandidate>)
                 output.push(MessageCandidate {
                     speaker,
                     text: extract_text_from_map(map),
+                    fingerprint: extract_fingerprint_from_map(map),
                 });
             }
 
@@ -661,6 +674,7 @@ fn collect_message_candidates(value: &Value, output: &mut Vec<MessageCandidate>)
 struct MessageCandidate {
     speaker: MessageSpeaker,
     text: Option<String>,
+    fingerprint: Option<String>,
 }
 
 #[derive(Debug)]
@@ -729,6 +743,38 @@ fn extract_text_from_map(map: &serde_json::Map<String, Value>) -> Option<String>
     }
 
     None
+}
+
+fn extract_fingerprint_from_map(map: &serde_json::Map<String, Value>) -> Option<String> {
+    for key in ["id", "messageId", "message_id", "seq", "messageSeq", "sequence"] {
+        if let Some(value) = map.get(key) {
+            if let Some(fingerprint) = stringify_fingerprint_value(value) {
+                return Some(format!("{key}:{fingerprint}"));
+            }
+        }
+    }
+
+    for key in ["createdAt", "created_at", "timestamp", "ts"] {
+        if let Some(value) = map.get(key) {
+            if let Some(fingerprint) = stringify_fingerprint_value(value) {
+                return Some(format!("{key}:{fingerprint}"));
+            }
+        }
+    }
+
+    extract_text_from_map(map).map(|text| format!("text:{text}"))
+}
+
+fn stringify_fingerprint_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
 }
 
 fn extract_session_key(value: &Value) -> Option<&str> {
@@ -906,7 +952,7 @@ fn extract_pairing_request_id(frame: &Value) -> Option<String> {
 mod tests {
     use serde_json::json;
 
-    use super::extract_latest_assistant_text;
+    use super::{AssistantReply, extract_latest_assistant_reply};
 
     #[test]
     fn latest_user_message_does_not_replay_previous_assistant_reply() {
@@ -917,7 +963,7 @@ mod tests {
             ]
         });
 
-        assert_eq!(extract_latest_assistant_text(&payload), None);
+        assert_eq!(extract_latest_assistant_reply(&payload), None);
     }
 
     #[test]
@@ -930,8 +976,28 @@ mod tests {
         });
 
         assert_eq!(
-            extract_latest_assistant_text(&payload),
-            Some("Fresh reply".to_string())
+            extract_latest_assistant_reply(&payload),
+            Some(AssistantReply {
+                text: "Fresh reply".to_string(),
+                fingerprint: "text:Fresh reply".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn latest_assistant_message_uses_identifier_fingerprint_when_present() {
+        let payload = json!({
+            "messages": [
+                { "role": "assistant", "id": "msg-123", "text": "Fresh reply" }
+            ]
+        });
+
+        assert_eq!(
+            extract_latest_assistant_reply(&payload),
+            Some(AssistantReply {
+                text: "Fresh reply".to_string(),
+                fingerprint: "id:msg-123".to_string(),
+            })
         );
     }
 }

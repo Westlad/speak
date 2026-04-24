@@ -3,7 +3,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::Result;
 use tokio::signal;
@@ -13,7 +13,7 @@ use tracing_subscriber::EnvFilter;
 use crate::audio::AudioOutput;
 use crate::cli::{Cli, Commands};
 use crate::config::AppConfig;
-use crate::gateway::{OpenClawGatewayClient, SessionSummary};
+use crate::gateway::{AssistantReply, OpenClawGatewayClient, SessionSummary};
 use crate::tts::{ElevenLabsClient, SpeechPreview};
 
 pub async fn run() -> Result<()> {
@@ -89,9 +89,9 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
                         }
 
                         match connection.fetch_latest_assistant_reply(session_key).await {
-                            Ok(Some(reply_text)) if tracker.should_speak(session_key, &reply_text) => {
+                            Ok(Some(reply)) if tracker.should_speak(session_key, &reply) => {
                                 tracing::info!("speaking assistant reply for session {session_key}");
-                                match tts.synthesize_preview(&reply_text).await {
+                                match tts.synthesize_preview(&reply.text).await {
                                     Ok(preview) => {
                                         playback.submit(session_key.to_string(), preview);
                                     }
@@ -203,22 +203,18 @@ fn session_matches_filter(filter: Option<&str>, session: &SessionSummary) -> boo
 
 struct ReplyTracker {
     entries: HashMap<String, TrackedReply>,
-    dedupe_window: Duration,
 }
 
 impl ReplyTracker {
-    fn new(dedupe_window: Duration) -> Self {
+    fn new(_dedupe_window: Duration) -> Self {
         Self {
             entries: HashMap::new(),
-            dedupe_window,
         }
     }
 
-    fn should_speak(&mut self, session_key: &str, text: &str) -> bool {
-        let now = Instant::now();
+    fn should_speak(&mut self, session_key: &str, reply: &AssistantReply) -> bool {
         if let Some(previous) = self.entries.get(session_key) {
-            if previous.text == text && now.duration_since(previous.spoken_at) < self.dedupe_window
-            {
+            if previous.fingerprint == reply.fingerprint {
                 return false;
             }
         }
@@ -226,8 +222,7 @@ impl ReplyTracker {
         self.entries.insert(
             session_key.to_string(),
             TrackedReply {
-                text: text.to_string(),
-                spoken_at: now,
+                fingerprint: reply.fingerprint.clone(),
             },
         );
         true
@@ -235,8 +230,7 @@ impl ReplyTracker {
 }
 
 struct TrackedReply {
-    text: String,
-    spoken_at: Instant,
+    fingerprint: String,
 }
 
 #[derive(Clone)]
@@ -287,5 +281,40 @@ impl PlaybackController {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReplyTracker;
+    use crate::gateway::AssistantReply;
+    use std::time::Duration;
+
+    #[test]
+    fn identical_fingerprint_is_never_spoken_twice() {
+        let mut tracker = ReplyTracker::new(Duration::from_secs(0));
+        let reply = AssistantReply {
+            text: "Earlier reply".to_string(),
+            fingerprint: "id:msg-1".to_string(),
+        };
+
+        assert!(tracker.should_speak("session-1", &reply));
+        assert!(!tracker.should_speak("session-1", &reply));
+    }
+
+    #[test]
+    fn same_text_with_new_fingerprint_still_speaks() {
+        let mut tracker = ReplyTracker::new(Duration::from_secs(60));
+        let first = AssistantReply {
+            text: "Repeated wording".to_string(),
+            fingerprint: "id:msg-1".to_string(),
+        };
+        let second = AssistantReply {
+            text: "Repeated wording".to_string(),
+            fingerprint: "id:msg-2".to_string(),
+        };
+
+        assert!(tracker.should_speak("session-1", &first));
+        assert!(tracker.should_speak("session-1", &second));
     }
 }
