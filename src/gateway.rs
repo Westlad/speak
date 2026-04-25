@@ -631,6 +631,7 @@ fn collect_session_summaries(value: &Value, output: &mut Vec<SessionSummary>) {
 pub struct AssistantReply {
     pub text: String,
     pub fingerprint: String,
+    pub timestamp_unix_ms: Option<u64>,
 }
 
 fn extract_latest_assistant_reply(value: &Value) -> Option<AssistantReply> {
@@ -641,6 +642,7 @@ fn extract_latest_assistant_reply(value: &Value) -> Option<AssistantReply> {
         MessageSpeaker::Assistant => Some(AssistantReply {
             text: latest.text?,
             fingerprint: latest.fingerprint?,
+            timestamp_unix_ms: latest.timestamp_unix_ms,
         }),
         MessageSpeaker::NonAssistant => None,
     }
@@ -654,6 +656,7 @@ fn collect_message_candidates(value: &Value, output: &mut Vec<MessageCandidate>)
                     speaker,
                     text: extract_text_from_map(map),
                     fingerprint: extract_fingerprint_from_map(map),
+                    timestamp_unix_ms: extract_timestamp_unix_ms_from_map(map),
                 });
             }
 
@@ -675,6 +678,7 @@ struct MessageCandidate {
     speaker: MessageSpeaker,
     text: Option<String>,
     fingerprint: Option<String>,
+    timestamp_unix_ms: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -763,6 +767,28 @@ fn extract_fingerprint_from_map(map: &serde_json::Map<String, Value>) -> Option<
     }
 
     extract_text_from_map(map).map(|text| format!("text:{text}"))
+}
+
+fn extract_timestamp_unix_ms_from_map(map: &serde_json::Map<String, Value>) -> Option<u64> {
+    for key in ["timestamp", "createdAt", "created_at", "ts"] {
+        if let Some(value) = map.get(key) {
+            match value {
+                Value::Number(number) => {
+                    if let Some(timestamp) = number.as_u64() {
+                        return Some(timestamp);
+                    }
+                }
+                Value::String(text) => {
+                    if let Ok(timestamp) = text.trim().parse::<u64>() {
+                        return Some(timestamp);
+                    }
+                }
+                Value::Null | Value::Bool(_) | Value::Array(_) | Value::Object(_) => {}
+            }
+        }
+    }
+
+    None
 }
 
 fn stringify_fingerprint_value(value: &Value) -> Option<String> {
@@ -980,6 +1006,7 @@ mod tests {
             Some(AssistantReply {
                 text: "Fresh reply".to_string(),
                 fingerprint: "text:Fresh reply".to_string(),
+                timestamp_unix_ms: None,
             })
         );
     }
@@ -997,6 +1024,7 @@ mod tests {
             Some(AssistantReply {
                 text: "Fresh reply".to_string(),
                 fingerprint: "id:msg-123".to_string(),
+                timestamp_unix_ms: None,
             })
         );
     }

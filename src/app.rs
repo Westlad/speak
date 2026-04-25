@@ -3,7 +3,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use tokio::signal;
@@ -88,11 +88,27 @@ async fn run_daemon(config: AppConfig) -> Result<()> {
                             continue;
                         }
 
+                        let event_started_at = std::time::Instant::now();
                         match connection.fetch_latest_assistant_reply(session_key).await {
                             Ok(Some(reply)) if tracker.should_speak(session_key, &reply) => {
+                                let history_fetch_ms = event_started_at.elapsed().as_millis();
+                                let reply_age_ms = reply
+                                    .timestamp_unix_ms
+                                    .and_then(approx_age_ms_from_unix_ms);
+                                tracing::info!(
+                                    "latency speak history_fetch_ms={} assistant_age_ms={:?}",
+                                    history_fetch_ms,
+                                    reply_age_ms
+                                );
                                 tracing::info!("speaking assistant reply for session {session_key}");
+                                let tts_started_at = std::time::Instant::now();
                                 match tts.synthesize_preview(&reply.text).await {
                                     Ok(preview) => {
+                                        tracing::info!(
+                                            "latency speak tts_ms={} since_event_ms={}",
+                                            tts_started_at.elapsed().as_millis(),
+                                            event_started_at.elapsed().as_millis()
+                                        );
                                         playback.submit(session_key.to_string(), preview);
                                     }
                                     Err(error) => {
@@ -201,6 +217,12 @@ fn session_matches_filter(filter: Option<&str>, session: &SessionSummary) -> boo
         .unwrap_or(false)
 }
 
+fn approx_age_ms_from_unix_ms(timestamp_unix_ms: u64) -> Option<u64> {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?;
+    let now_ms = u64::try_from(now.as_millis()).ok()?;
+    Some(now_ms.saturating_sub(timestamp_unix_ms))
+}
+
 struct ReplyTracker {
     entries: HashMap<String, TrackedReply>,
 }
@@ -257,20 +279,29 @@ impl PlaybackController {
         let generation = self.generation.clone();
         let interrupt_on_new_reply = self.interrupt_on_new_reply;
         let generation_id = generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let submitted_at = std::time::Instant::now();
 
         tokio::spawn(async move {
             let playback_guard = lock.lock().await;
+            let queue_wait_ms = submitted_at.elapsed().as_millis();
             if interrupt_on_new_reply && generation_id != generation.load(Ordering::SeqCst) {
                 tracing::info!("skipping stale queued speech for session {session_key}");
                 drop(playback_guard);
                 return;
             }
 
+            let playback_started_at = std::time::Instant::now();
             let task = tokio::task::spawn_blocking(move || audio.play_preview(&preview)).await;
             drop(playback_guard);
 
             match task {
                 Ok(Ok(())) => {
+                    tracing::info!(
+                        "latency speak playback_queue_ms={} playback_ms={} since_submit_ms={}",
+                        queue_wait_ms,
+                        playback_started_at.elapsed().as_millis(),
+                        submitted_at.elapsed().as_millis()
+                    );
                     tracing::info!("finished speech playback for session {session_key}");
                 }
                 Ok(Err(error)) => {
@@ -296,6 +327,7 @@ mod tests {
         let reply = AssistantReply {
             text: "Earlier reply".to_string(),
             fingerprint: "id:msg-1".to_string(),
+            timestamp_unix_ms: None,
         };
 
         assert!(tracker.should_speak("session-1", &reply));
@@ -308,10 +340,12 @@ mod tests {
         let first = AssistantReply {
             text: "Repeated wording".to_string(),
             fingerprint: "id:msg-1".to_string(),
+            timestamp_unix_ms: None,
         };
         let second = AssistantReply {
             text: "Repeated wording".to_string(),
             fingerprint: "id:msg-2".to_string(),
+            timestamp_unix_ms: None,
         };
 
         assert!(tracker.should_speak("session-1", &first));
